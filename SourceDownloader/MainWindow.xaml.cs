@@ -139,7 +139,7 @@ namespace SourceDownloader {
 
         private void Window_Closing(object sender, CancelEventArgs e) {
             var xs = new XmlSerializer(typeof(ViewModel));
-            using (var fs = new FileStream(SettingPath, FileMode.OpenOrCreate, FileAccess.Write)) {
+            using (var fs = new FileStream(SettingPath, FileMode.Create, FileAccess.Write)) {
                 xs.Serialize(fs, vm);
             }
         }
