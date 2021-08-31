@@ -374,28 +374,25 @@ namespace SourceDownloader {
                 OnPropertyChanged(nameof(URL));
             }
         }
-        [XmlIgnore]
+        string _PatrolConditions = "";
         public string PatrolConditions {
             get {
-                PatrolConditionList = Properties.Settings.Default.PatrolConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
-                return Properties.Settings.Default.PatrolConditions;
+                return _PatrolConditions;
             }
             set {
-                Properties.Settings.Default.PatrolConditions = value;
-                Properties.Settings.Default.Save();
-                PatrolConditionList = Properties.Settings.Default.PatrolConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
+                _PatrolConditions = value;
+                PatrolConditionList = _PatrolConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
             }
         }
-        [XmlIgnore]
+        string _DownloadConditions = @"!\.js";
         public string DownloadConditions {
             get {
-                DownloadConditionList = Properties.Settings.Default.DownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
-                return Properties.Settings.Default.DownloadConditions;
+                DownloadConditionList = _DownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
+                return _DownloadConditions;
             }
             set {
-                Properties.Settings.Default.DownloadConditions = value;
-                Properties.Settings.Default.Save();
-                DownloadConditionList = Properties.Settings.Default.DownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
+                _DownloadConditions = value;
+                DownloadConditionList = _DownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
             }
         }
         internal List<string> PatrolConditionList = new List<string>();

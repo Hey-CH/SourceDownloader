@@ -22,29 +22,5 @@ namespace SourceDownloader.Properties {
                 return defaultInstance;
             }
         }
-        
-        [global::System.Configuration.UserScopedSettingAttribute()]
-        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("")]
-        public string PatrolConditions {
-            get {
-                return ((string)(this["PatrolConditions"]));
-            }
-            set {
-                this["PatrolConditions"] = value;
-            }
-        }
-        
-        [global::System.Configuration.UserScopedSettingAttribute()]
-        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("!\\.js")]
-        public string DownloadConditions {
-            get {
-                return ((string)(this["DownloadConditions"]));
-            }
-            set {
-                this["DownloadConditions"] = value;
-            }
-        }
     }
 }
