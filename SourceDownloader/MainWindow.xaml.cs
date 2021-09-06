@@ -259,13 +259,17 @@ namespace SourceDownloader {
                         var bmp = Bitmap.FromStream(ms);
                         bmp.Save(path);
                     }
-                } catch {
-                }
+                } catch { }
             } else {
-                Uri uri = new Uri(src);
-                var path = GetSavePath(uri.LocalPath);
-                using (var wc = new WebClient()) {
-                    wc.DownloadFile(src, path);
+                try {
+                    Uri uri = new Uri(src);
+                    var path = GetSavePath(uri.LocalPath);
+                    using (var wc = new WebClient()) {
+                        wc.DownloadFile(src, path);
+                    }
+                } catch(WebException ex) {
+                    //404 Not found の時無限ループしちゃうのでその対応
+                    if (!ex.Message.Contains("404")) throw;
                 }
             }
         }
