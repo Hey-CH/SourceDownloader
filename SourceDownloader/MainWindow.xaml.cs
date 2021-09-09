@@ -27,6 +27,7 @@ namespace SourceDownloader {
     public partial class MainWindow : Window {
         private ViewModel vm;
         string _DownloadDir;
+        bool navigateOnly = false;
         private string dlDir {
             get {
                 if(string.IsNullOrEmpty(_DownloadDir))
@@ -96,14 +97,16 @@ namespace SourceDownloader {
         }
 
         private async void CoreWebView2_NavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e) {
-            await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
+            if (!navigateOnly)
+                await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
         }
 
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e) {
             string msg = "";
             try {
                 msg = e.TryGetWebMessageAsString();
-                if (msg.StartsWith(onload)) {//とりあえず廃止
+                if (msg.StartsWith(onload)) {//とりあえず廃止→NavigateOnlyモード追加のため復活→やっぱり廃止（これするとgetHrefSrcList();のメッセージが正常に戻ってこない）
+                    vm.URL = webView2.CoreWebView2.Source;//🔍の時にリンクをクリックしたとき等に変更したい
                     //await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
                     //await webView2.CoreWebView2.ExecuteScriptAsync("getHtml();");//2連続で実行すると実行されるようなされないようなダメダメになる
                 } else if (msg.StartsWith(hreflist)) {
@@ -123,31 +126,41 @@ namespace SourceDownloader {
                     //ダウンロードリスト作成
                     AddDownloadList(srcs);
                 } else {
-                    MessageBox.Show(msg);
+                    //MessageBox.Show(msg);
                 }
             } catch { } finally { vm.Ready = true; }
         }
 
         private void Button_Click(object sender, RoutedEventArgs e) {
+            navigateOnly = true;
+            Navigate(vm.URL);
+        }
+
+        private void playBtn_Click(object sender, RoutedEventArgs e) {
+            vm.FirstPatrolURLs.Add(vm.URL);
+            navigateOnly = false;
             Navigate(vm.URL);
         }
 
         private void TextBox_KeyDown(object sender, KeyEventArgs e) {
-            if (e.Key == Key.Enter && vm.Ready)
+            if (e.Key == Key.Enter && vm.Ready) {
+                navigateOnly = true;
                 Navigate(vm.URL);
+            }
         }
 
         private void Window_Closing(object sender, CancelEventArgs e) {
-            var xs = new XmlSerializer(typeof(ViewModel));
-            using (var fs = new FileStream(SettingPath, FileMode.Create, FileAccess.Write)) {
-                xs.Serialize(fs, vm);
+            if (vm.PatrolURLList.Count > 0) {
+                var xs = new XmlSerializer(typeof(ViewModel));
+                using (var fs = new FileStream(SettingPath, FileMode.Create, FileAccess.Write)) {
+                    xs.Serialize(fs, vm);
+                }
             }
         }
 
         private bool Navigate(string url) {
             if (!vm.Ready) return false;
             Dispatcher.Invoke(() => {
-                if (vm.FirstPatrolURL == null) vm.FirstPatrolURL = url;
                 if (vm.URL != url) vm.URL = url;
                 webView2.CoreWebView2.Navigate(vm.URL);
                 vm.Ready = false;
@@ -175,7 +188,7 @@ namespace SourceDownloader {
         /// </summary>
         /// <param name="urls">巡回すべきかどうか不明のURLのリスト</param>
         public void CheckAndAddPatrolURLList(List<string> urls) {
-            string host = new Uri(vm.FirstPatrolURL).Host.ToLower();
+            var hosts = vm.FirstPatrolURLs.Select(u => new Uri(u).Host.ToLower());//new Uri(vm.FirstPatrolURL).Host.ToLower();
             var baseUri = new Uri(vm.URL);
             var addURLs = new List<string>();//後でまとめてInsertするための入れ物
             foreach (var u in urls) {
@@ -188,16 +201,22 @@ namespace SourceDownloader {
                 if (url.Contains("#")) continue;//Page内リンクはNavigatedイベントが発生しないので無視（id記法の場合はそもそも取得しない）
 
                 var otherUri = new Uri(baseUri, url);
-                if (otherUri.Host.ToLower() != host) continue;//ホストが違う場合巡回しない
+                if (!hosts.Contains(otherUri.Host.ToLower())) continue;//ホストが違う場合巡回しない
                 //otherUriがルートを示していれば巡回しない
                 if (otherUri.AbsoluteUri.ToLower() == (baseUri.Scheme + "://" + baseUri.Host + "/").ToLower()) continue;
 
+                //[2021/09/09]HrefDownloadCondition追加（hrefでもこの条件にマッチする場合Downloadする）
+                if (CheckConditions(otherUri.AbsoluteUri, vm.HrefDownloadConditionList)) {
+                    if (!vm.DownloadList.Contains(otherUri.AbsoluteUri)) vm.DownloadList.Add(otherUri.AbsoluteUri);
+                    continue;
+                }
+
                 var check = true;
-                if (!issrc) {//a要素がsrcを持つ要素の先祖で有る場合基本的に追加する（SourceDownloaderなので。）
+                if (!issrc) {//a要素がsrcを持つ要素の先祖である場合基本的に追加する（SourceDownloaderなので。）
                     check = CheckConditions(otherUri.AbsoluteUri, vm.PatrolConditionList);
                 }
                 //無視もせず、巡回したリストにも、巡回するリストにも無い場合追加
-                if (check && vm.FirstPatrolURL.ToLower()!=otherUri.AbsoluteUri.ToLower() && !vm.PatrolURLList.Contains(otherUri.AbsoluteUri)) {
+                if (check && !vm.FirstPatrolURLs.Select(u=>u.ToLower()).Contains(otherUri.AbsoluteUri.ToLower()) && !vm.PatrolURLList.Contains(otherUri.AbsoluteUri)) {
                     //Appendすると、関係ないページの後にPatrolする事になるので、現在見ているページの直後に追加する
                     //vm.PatrolURLList.Add(otherUri.AbsoluteUri);
                     addURLs.Add(otherUri.AbsoluteUri);
@@ -226,22 +245,17 @@ namespace SourceDownloader {
                 //!で始まる場合はそれ以降の文字がマッチする場合falseを返す
                 //それ以外は、その文字列がマッチしない場合falseを返す
                 if (cnd.StartsWith('!')) {
-                    if (Regex.IsMatch(absoluteUri, cnd.Substring(1))){
+                    if (Regex.IsMatch(absoluteUri, cnd.Substring(1), RegexOptions.IgnoreCase)){
                         check = false;
                         break;
                     }
                 } else {
                     //!が付いていない場合は、そのパターンがマッチしないとダメだが、|で区切る事で複数パターン登録できる
-                    //登録されている場合、マッチしてもしなくても終了
-                    var check2 = false;
-                    foreach (var p in cnd.Split('|')) {
-                        if (Regex.IsMatch(absoluteUri, cnd)) {
-                            check2 = true;
-                            break;
-                        }
+                    //[2021/09/09]↑の仕様廃止（複数の場合も正規表現で指定）
+                    if (!Regex.IsMatch(absoluteUri, cnd, RegexOptions.IgnoreCase)) {
+                        check = false;
+                        break;
                     }
-                    check = check2;
-                    break;
                 }
             }
             return check;
@@ -344,7 +358,21 @@ namespace SourceDownloader {
         }
         static string OnLoadEvent {
             get {
-                return "window.onload = function() {window.chrome.webview.postMessage('<<<onload>>>');}";
+                return "var h='';"
+                        + "window.addEventListener('load', function () {"
+                            + "if (document.readyState === 'complete' && h!=document.location.href) {"
+                                + "h=document.location.href;"
+                                + "window.chrome.webview.postMessage('<<<onload>>>');"
+                            + "}"
+                        + "});";
+                //return "window.onload = function() {window.chrome.webview.postMessage('<<<onload>>>');}";
+                //return "window.addEventListener('popstate', (event) => {"
+                //        + "window.chrome.webview.postMessage('<<<onload>>>');"
+                //        + "});"
+                //        + "const pushUrl = (href) => {"
+                //            + "history.pushState({}, '', href);"
+                //            + "window.dispatchEvent(new Event('popstate'));"
+                //        + "};";
             }
         }
         static string GetHTML {
@@ -372,7 +400,7 @@ namespace SourceDownloader {
         string _URL = "";
         [XmlIgnore]
         public string URL {
-            get { return _URL; }
+            get { return Uri.UnescapeDataString(_URL); }
             set {
                 _URL = value;
                 OnPropertyChanged(nameof(URL));
@@ -399,10 +427,23 @@ namespace SourceDownloader {
                 DownloadConditionList = _DownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
             }
         }
+        string _HrefDownloadConditions = @"\.(jpg|jpeg|png|bmp|gif|tiff|svg|psd|pdf|webp|zip|mp4|mov)$";
+        public string HrefDownloadConditions {
+            get {
+                HrefDownloadConditionList = _HrefDownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
+                return _HrefDownloadConditions;
+            }
+            set {
+                _HrefDownloadConditions = value;
+                HrefDownloadConditionList = _HrefDownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
+            }
+        }
+
         internal List<string> PatrolConditionList = new List<string>();
         internal List<string> DownloadConditionList = new List<string>();
+        internal List<string> HrefDownloadConditionList = new List<string>();
 
-        public string FirstPatrolURL { get; set; }//ユーザーが最初にNavigateしたURL
+        public List<string> FirstPatrolURLs { get; set; } = new List<string>();//ユーザーが最初に再生ボタンを押してダウンロード開始したURLのリスト
         public int PatrolPos { get; set; }//PatrolURLListの何番目を巡回中か
         public List<string> PatrolURLList { get; set; } = new List<string>();//巡回するURLのリスト
         public int DownloadPos { get; set; }//DownloadListの何番目をダウンロード中か

@@ -10,35 +10,53 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="25"/>
-            <RowDefinition Height="25"/>
-            <RowDefinition Height="25"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="25"/>
         </Grid.RowDefinitions>
         <Grid Grid.Row="0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="50"/>
+                <ColumnDefinition Width="30"/>
+                <ColumnDefinition Width="30"/>
             </Grid.ColumnDefinitions>
             <TextBox Grid.Column="0" Text="{Binding URL,UpdateSourceTrigger=PropertyChanged}" KeyDown="TextBox_KeyDown"/>
             <Button Grid.Column="1" Content="🔍" Click="Button_Click" IsEnabled="{Binding Ready}"/>
+            <Button Grid.Column="2" Content="▶️" x:Name="playBtn" Click="playBtn_Click" IsEnabled="{Binding Ready}"/>
         </Grid>
-        <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="130"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="Patrol Conditions : " Grid.Column="0" VerticalAlignment="Center" HorizontalAlignment="Right" ToolTip="Slash separated"/>
-            <TextBox Grid.Column="1" Text="{Binding PatrolConditions}"/>
-        </Grid>
-        <Grid Grid.Row="2">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="130"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="Download Conditions : " Grid.Column="0" VerticalAlignment="Center" HorizontalAlignment="Right" ToolTip="Slash separated"/>
-            <TextBox Grid.Column="1" Text="{Binding DownloadConditions}"/>
-        </Grid>
-        <wv2:WebView2 x:Name="webView2" Grid.Row="3"/>
+        <Expander Grid.Row="1" Header="Conditions">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="25"/>
+                    <RowDefinition Height="25"/>
+                    <RowDefinition Height="25"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="Patrol Conditions : " Grid.Column="0" VerticalAlignment="Center" HorizontalAlignment="Right" ToolTip="Slash separated"/>
+                    <TextBox Grid.Column="1" Text="{Binding PatrolConditions}"/>
+                </Grid>
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="href Download Conditions : " Grid.Column="0" VerticalAlignment="Center" HorizontalAlignment="Right" ToolTip="Slash separated"/>
+                    <TextBox Grid.Column="1" Text="{Binding HrefDownloadConditions}"/>
+                </Grid>
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="Download Conditions : " Grid.Column="0" VerticalAlignment="Center" HorizontalAlignment="Right" ToolTip="Slash separated"/>
+                    <TextBox Grid.Column="1" Text="{Binding DownloadConditions}"/>
+                </Grid>
+            </Grid>
+        </Expander>
+        <wv2:WebView2 x:Name="webView2" Grid.Row="2"/>
     </Grid>
 </Window>
