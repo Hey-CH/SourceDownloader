@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -99,6 +100,8 @@ namespace SourceDownloader {
         private async void CoreWebView2_NavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e) {
             if (!navigateOnly)
                 await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
+            else
+                vm.Ready = true;
         }
 
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e) {
@@ -136,10 +139,14 @@ namespace SourceDownloader {
             Navigate(vm.URL);
         }
 
-        private void playBtn_Click(object sender, RoutedEventArgs e) {
+        private async void playBtn_Click(object sender, RoutedEventArgs e) {
             vm.FirstPatrolURLs.Add(vm.URL);
             navigateOnly = false;
-            Navigate(vm.URL);
+            //[2021/09/10]巡回開始する時、UI上のURLとWebView2のURIが同じ場合、そのまま巡回開始する
+            if (webView2.CoreWebView2.Source != vm.URL)
+                Navigate(vm.URL);
+            else
+                await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
         }
 
         private void TextBox_KeyDown(object sender, KeyEventArgs e) {
@@ -150,7 +157,7 @@ namespace SourceDownloader {
         }
 
         private void Window_Closing(object sender, CancelEventArgs e) {
-            if (vm.PatrolURLList.Count > 0) {
+            if (vm.DownloadList.Count > 0) {//巡回が目的じゃなくてダウンロードが目的でした。
                 var xs = new XmlSerializer(typeof(ViewModel));
                 using (var fs = new FileStream(SettingPath, FileMode.Create, FileAccess.Write)) {
                     xs.Serialize(fs, vm);
@@ -198,18 +205,24 @@ namespace SourceDownloader {
                     issrc = true;
                     url = url.Substring(src.Length);
                 }
-                if (url.Contains("#")) continue;//Page内リンクはNavigatedイベントが発生しないので無視（id記法の場合はそもそも取得しない）
 
                 var otherUri = new Uri(baseUri, url);
-                if (!hosts.Contains(otherUri.Host.ToLower())) continue;//ホストが違う場合巡回しない
-                //otherUriがルートを示していれば巡回しない
-                if (otherUri.AbsoluteUri.ToLower() == (baseUri.Scheme + "://" + baseUri.Host + "/").ToLower()) continue;
 
                 //[2021/09/09]HrefDownloadCondition追加（hrefでもこの条件にマッチする場合Downloadする）
+                //ダウンロードするものはホストが違ってもダウンロードするため先にチェック
                 if (CheckConditions(otherUri.AbsoluteUri, vm.HrefDownloadConditionList)) {
                     if (!vm.DownloadList.Contains(otherUri.AbsoluteUri)) vm.DownloadList.Add(otherUri.AbsoluteUri);
                     continue;
                 }
+
+                if (!hosts.Contains(otherUri.Host.ToLower())) continue;//ホストが違う場合巡回しない
+                //otherUriがルートを示していれば巡回しない
+                if (otherUri.AbsoluteUri.ToLower() == (baseUri.Scheme + "://" + baseUri.Host + "/").ToLower()) continue;
+
+                //[2021/09/10]URLに#が入っていたらページ内リンクと思っていたが、そうでない場合もあることが判明（https://～～～/#/aiueo/abc.html みたいな感じのもある）
+                //従って、URLの最後の「/」以降の文字列に#が入っていたらページ内リンクとする
+                if (otherUri.AbsoluteUri.Contains('#')
+                    && otherUri.AbsoluteUri.Substring(otherUri.AbsoluteUri.LastIndexOf('/')).Contains("#")) continue;//Page内リンクはNavigatedイベントが発生しないので無視（id記法の場合はそもそも取得しない）
 
                 var check = true;
                 if (!issrc) {//a要素がsrcを持つ要素の先祖である場合基本的に追加する（SourceDownloaderなので。）
@@ -302,6 +315,22 @@ namespace SourceDownloader {
             var dir = new FileInfo(path).DirectoryName;
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
             return path;
+        }
+        /// <summary>
+        /// otherUriがbaseUriのルート（http://www.aaa.com）と同じならtrueを返す
+        /// </summary>
+        /// <param name="baseUri">元となるUri</param>
+        /// <param name="otherUri">調べたいUri</param>
+        /// <returns></returns>
+        private bool IsBaseRoot(Uri baseUri, Uri otherUri) {
+            var baseRoot = baseUri.GetLeftPart(UriPartial.Authority);
+            var other = otherUri.AbsoluteUri;
+            if (other.Contains("#")) {
+                if (other.Substring(other.LastIndexOf('/')).Contains('#'))
+                    other = other.Substring(0, other.LastIndexOf('#'));
+            }
+            if (other.EndsWith('/')) other = other.Substring(0, other.Length - 1);
+            return baseRoot.ToLower() == other.ToLower();
         }
 
         #region statics
