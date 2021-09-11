@@ -80,6 +80,10 @@ namespace SourceDownloader {
                         try {
                             Download(vm.DownloadList[vm.DownloadPos]);
                             vm.DownloadPos++;
+
+                            //ダウンロード完了時メッセージボックス表示
+                            if (vm.DownloadPos >= vm.DownloadList.Count && vm.PatrolPos >= vm.PatrolURLList.Count)
+                                MessageBox.Show("Download completed.");
                         } catch { }
                     }
                 }
@@ -136,23 +140,26 @@ namespace SourceDownloader {
 
         private void Button_Click(object sender, RoutedEventArgs e) {
             navigateOnly = true;
-            Navigate(vm.URL);
+            Navigate(vm.RealURL);
         }
 
         private async void playBtn_Click(object sender, RoutedEventArgs e) {
-            vm.FirstPatrolURLs.Add(vm.URL);
+            vm.FirstPatrolURLs.Add(vm.RealURL);
             navigateOnly = false;
             //[2021/09/10]巡回開始する時、UI上のURLとWebView2のURIが同じ場合、そのまま巡回開始する
-            if (webView2.CoreWebView2.Source != vm.URL)
-                Navigate(vm.URL);
-            else
+            //[2021/09/11]WebView2が何か表示している場合（Sourceに値が入っている場合）それを巡回する
+            //※ブラウザに表示されているURLを入力しても同じ表示にならない場合があるため
+            if (webView2.CoreWebView2.Source.Length > 0) {
+                vm.URL = webView2.CoreWebView2.Source;
                 await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
+            } else
+                Navigate(vm.RealURL);
         }
 
         private void TextBox_KeyDown(object sender, KeyEventArgs e) {
             if (e.Key == Key.Enter && vm.Ready) {
                 navigateOnly = true;
-                Navigate(vm.URL);
+                Navigate(vm.RealURL);
             }
         }
 
@@ -169,7 +176,7 @@ namespace SourceDownloader {
             if (!vm.Ready) return false;
             Dispatcher.Invoke(() => {
                 if (vm.URL != url) vm.URL = url;
-                webView2.CoreWebView2.Navigate(vm.URL);
+                webView2.CoreWebView2.Navigate(vm.RealURL);
                 vm.Ready = false;
             });
             return true;
@@ -196,7 +203,7 @@ namespace SourceDownloader {
         /// <param name="urls">巡回すべきかどうか不明のURLのリスト</param>
         public void CheckAndAddPatrolURLList(List<string> urls) {
             var hosts = vm.FirstPatrolURLs.Select(u => new Uri(u).Host.ToLower());//new Uri(vm.FirstPatrolURL).Host.ToLower();
-            var baseUri = new Uri(vm.URL);
+            var baseUri = new Uri(vm.RealURL);
             var addURLs = new List<string>();//後でまとめてInsertするための入れ物
             foreach (var u in urls) {
                 bool issrc = false;
@@ -236,7 +243,7 @@ namespace SourceDownloader {
                 }
             }
             if (addURLs.Count > 0) {
-                var idx = vm.PatrolURLList.IndexOf(vm.URL);
+                var idx = vm.PatrolURLList.IndexOf(vm.RealURL);
                 if (idx < 0)
                     vm.PatrolURLList.AddRange(addURLs);
                 else
@@ -245,7 +252,7 @@ namespace SourceDownloader {
         }
 
         public void AddDownloadList(List<string> urls) {
-            var baseUri = new Uri(vm.URL);
+            var baseUri = new Uri(vm.RealURL);
             foreach (var url in urls) {
                 var otherUri = new Uri(baseUri, url);
                 if (CheckConditions(otherUri.AbsoluteUri, vm.DownloadConditionList) && !vm.DownloadList.Contains(otherUri.AbsoluteUri))
@@ -282,6 +289,7 @@ namespace SourceDownloader {
                     var code = m.Groups[2].Value;
                     var data = m.Groups[3].Value;
                     var path = GetSavePath("data." + type.Split('/')[1]);
+                    if (File.Exists(path)) File.Delete(path);//同ファイルが有る場合消す
                     using (var ms = new MemoryStream(Convert.FromBase64String(data))) {
                         var bmp = Bitmap.FromStream(ms);
                         bmp.Save(path);
@@ -291,6 +299,7 @@ namespace SourceDownloader {
                 try {
                     Uri uri = new Uri(src);
                     var path = GetSavePath(uri.LocalPath);
+                    if (File.Exists(path)) File.Delete(path);//同ファイルが有る場合消す（前回ダウンロード時、中途半端にダウンロードした物の可能性が高いため）
                     using (var wc = new WebClient()) {
                         wc.DownloadFile(src, path);
                     }
@@ -427,12 +436,20 @@ namespace SourceDownloader {
             }
         }
         string _URL = "";
-        [XmlIgnore]
         public string URL {
             get { return Uri.UnescapeDataString(_URL); }
             set {
                 _URL = value;
                 OnPropertyChanged(nameof(URL));
+            }
+        }
+        [XmlIgnore]
+        public string RealURL {
+            get {
+                if (Regex.IsMatch(_URL, @"[^-\]_.~!*'();:@&=+$,/?%#[A-z0-9]"))
+                    return Uri.EscapeDataString(_URL);
+                else
+                    return _URL;
             }
         }
         string _PatrolConditions = "";
