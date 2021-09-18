@@ -1,14 +1,17 @@
 ﻿using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -29,6 +32,10 @@ namespace SourceDownloader {
         private ViewModel vm;
         string _DownloadDir;
         bool navigateOnly = false;
+        bool executeJs = false;//javascript実行モード
+        string exeJavaScript = "";//実行するjavascript
+        int patrolBefore = -1;//getHrefSrcListが帰ってきたときに確認するPos
+        bool survive = true;
         private string dlDir {
             get {
                 if(string.IsNullOrEmpty(_DownloadDir))
@@ -39,6 +46,11 @@ namespace SourceDownloader {
         private string SettingPath {
             get {
                 return System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "setting.xml"); ;
+            }
+        }
+        private string LogPath {
+            get {
+                return System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "failed.log"); ;
             }
         }
 
@@ -61,21 +73,43 @@ namespace SourceDownloader {
 
             //巡回スレッド
             Task.Run(() => {
-                while (true) {
-                    if (vm.PatrolPos <= vm.PatrolURLList.Count - 1 && vm.Ready && !string.IsNullOrEmpty(vm.PatrolURLList[vm.PatrolPos])) {
+                while (survive) {
+                    if (vm.PatrolPos < vm.PatrolURLList.Count && vm.Ready && !string.IsNullOrEmpty(vm.PatrolURLList[vm.PatrolPos])) {
                         try {
-                            if (Navigate(vm.PatrolURLList[vm.PatrolPos])) {
-                                vm.PatrolPos++;
-                                System.Threading.Thread.Sleep(100);
-                            }
-                        } catch { }
+                            if (patrolBefore == vm.PatrolPos) continue;
+                            patrolBefore = vm.PatrolPos;
+                            errCount = 0;
+                            var url = vm.PatrolURLList[vm.PatrolPos];
+                            Debug.Print(url);
+                            if (url.StartsWith(javascript)) {
+                                exeJavaScript = GetJavaScriptFormMsg(url);
+                                if (IsIgnoreJavaScript(exeJavaScript)) {
+                                    vm.PatrolPos++;
+                                    continue;
+                                }
+                                executeJs = true;
+                                url = url.Substring(0, url.IndexOf('|')).Replace(javascript, "");
+                            } else executeJs = false;
+                            //js実行時、表示中のURLとurlが同じならNavigateしない
+                            Dispatcher.Invoke(() => {
+                                if (executeJs && GetWebView2URL().ToLower() == url.ToLower()) {
+                                    vm.Ready = false;//NavigateしなくてもURLが変わる可能性があるため設定
+                                    CoreWebView2_NavigationCompleted(webView2, null);
+                                    executeJs = false;
+                                } else
+                                    Navigate(url);
+                            });
+                            System.Threading.Thread.Sleep(100);
+                        } catch { } finally {
+                            Dispatcher.Invoke(() => { vm.PatrolStatus = vm.PatrolPos + "/" + vm.PatrolURLList.Count; });
+                        }
                     }
                 }
             });
 
             //ダウンロードスレッド
             Task.Run(() => {
-                while (true) {
+                while (survive) {
                     if (vm.DownloadPos <= vm.DownloadList.Count - 1) {
                         try {
                             Download(vm.DownloadList[vm.DownloadPos]);
@@ -84,7 +118,9 @@ namespace SourceDownloader {
                             //ダウンロード完了時メッセージボックス表示
                             if (vm.DownloadPos >= vm.DownloadList.Count && vm.PatrolPos >= vm.PatrolURLList.Count)
                                 MessageBox.Show("Download completed.");
-                        } catch { }
+                        } catch { } finally {
+                            Dispatcher.Invoke(() => { vm.DownloadStatus = vm.DownloadPos + "/" + vm.DownloadList.Count; });
+                        }
                     }
                 }
             });
@@ -93,7 +129,7 @@ namespace SourceDownloader {
         private async void InitWebView2() {
             await webView2.EnsureCoreWebView2Async(null);
             //coreWV2.DownloadStarting += CoreWV2_DownloadStarting;//これは右クリックして保存したときのやつみたい
-            //await webView2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(OnLoadEvent);//ロード完了時にメッセージ送信//何故か複数回呼ばれるのでNavigationCompletedに変更
+            await webView2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(OnLoadEvent);//ロード完了時にメッセージ送信//何故か複数回呼ばれるのでNavigationCompletedに変更
             await webView2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(GetHrefSrcListFunction);//a要素のhref属性値をメッセージ送信
             await webView2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(GetHTML);//HTMLを取得
             webView2.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
@@ -101,30 +137,85 @@ namespace SourceDownloader {
             vm.Ready = true;
         }
 
+        string lastExecJs = "";
         private async void CoreWebView2_NavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e) {
-            if (!navigateOnly)
-                await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
-            else
+            if (executeJs && !Regex.IsMatch(exeJavaScript,"alert\\s*\\(",RegexOptions.IgnoreCase)) {
+                var js = "var u1=document.location.href;"
+                        + "try{"+(exeJavaScript.EndsWith(';') ? exeJavaScript : exeJavaScript + ";")+"}catch{}"
+                        + "var u2=document.location.href;"
+                        + "if(u2!=u1)window.chrome.webview.postMessage('href changed.');"
+                        + "else window.chrome.webview.postMessage('href not changed.');";
+                if (lastExecJs != js) {
+                    lastExecJs = js;
+                    await webView2.CoreWebView2.ExecuteScriptAsync(js);
+                }else
+                    await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
+
+            } else
                 vm.Ready = true;
         }
 
-        private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e) {
-            string msg = "";
+        int waitCount = 0;
+        private delegate Task Method();
+        private Method execMsg;
+        string lastMsg = "";
+        int errCount = 0;
+        private async void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e) {
+            if (navigateOnly) return;
             try {
-                msg = e.TryGetWebMessageAsString();
-                if (msg.StartsWith(onload)) {//とりあえず廃止→NavigateOnlyモード追加のため復活→やっぱり廃止（これするとgetHrefSrcList();のメッセージが正常に戻ってこない）
-                    vm.URL = webView2.CoreWebView2.Source;//🔍の時にリンクをクリックしたとき等に変更したい
-                    //await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
-                    //await webView2.CoreWebView2.ExecuteScriptAsync("getHtml();");//2連続で実行すると実行されるようなされないようなダメダメになる
-                } else if (msg.StartsWith(hreflist)) {
-                    //msgは<<<hreflist>>>\n...\n<<<srclist>>>\n...\nという感じになっている
-                    var idx = msg.IndexOf(srclist);
-                    var hrefsmsg = msg.Substring(0, idx - 1);
-                    var srcsmsg = msg.Substring(0, msg.Length - 1).Substring(idx);
+                var msg = e.TryGetWebMessageAsString();
+                if (msg.StartsWith(url)) {
+                    lastMsg = msg;
+                    //Messageを受信したらメッセージ実行タスクを起動
+                    if (execMsg == null) {
+                        execMsg = ExecMsgAfterWait;
+                        execMsg();
+                    } else {
+                        waitCount = 0;
+                    }
+                } else {
+                    if(msg == "href not changed.") await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
+                    else MessageBox.Show(msg);
+                }
+            } catch(ArgumentException aex) {
+                //メッセージが取得できない場合、仕方ないのでもう1度取得
+                errCount++;
+                if (errCount < 10) {
+                    await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
+                } else vm.PatrolPos++;//どうしても取得できない場合は無視するしかない。
+            }
+        }
+        private async Task ExecMsgAfterWait() {
+            await Task.Run(async () => {
+                while (waitCount < 20) {
+                    System.Threading.Thread.Sleep(100);
+                    waitCount++;
+                }
+                waitCount = 0;
+                await ExecLastMsg();
+            });
+        }
+        private async Task ExecLastMsg() {
+            execMsg = null;
+            try {
+                if (lastMsg.StartsWith(url)) {
+                    //msgは<<<url>>>http://~~~\n<<<hreflist>>>\n...\n<<<srclist>>>\n...\nという感じになっている
+                    var idx = lastMsg.IndexOf(hreflist);
+                    var urlmsg = lastMsg.Substring(0, idx - 1).Replace(url, "");
+                    vm.URL = urlmsg;
+                    if (GetWebView2URL() != urlmsg) {
+                        //getHrefSrcListで取得したURLとwebView2のURLが違っていたら再度取得
+                        await Task.Delay(5000);
+                        await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
+                        return;
+                    }
+
+                    lastMsg = lastMsg.Substring(idx);
+                    idx = lastMsg.IndexOf(srclist);
+                    var hrefsmsg = lastMsg.Substring(0, idx - 1);
+                    var srcsmsg = lastMsg.Substring(0, lastMsg.Length - 1).Substring(idx);
                     var hrefs = hrefsmsg.Split('\n').Skip(1).ToList();
                     var srcs = srcsmsg.Split('\n').Skip(1).ToList();
-
-                    //MessageBox.Show("href count:" + hrefs.Count + "\n" + "srcs count:" + srcs.Count);
 
                     //巡回リスト作成
                     CheckAndAddPatrolURLList(hrefs);
@@ -135,6 +226,9 @@ namespace SourceDownloader {
                 } else {
                     //MessageBox.Show(msg);
                 }
+                //メッセージが返ってきたらPatrolPosを１つ進める
+                if (!navigateOnly && patrolBefore <= vm.PatrolPos)
+                    vm.PatrolPos = patrolBefore + 1;
             } catch { } finally { vm.Ready = true; }
         }
 
@@ -148,9 +242,9 @@ namespace SourceDownloader {
             navigateOnly = false;
             //[2021/09/10]巡回開始する時、UI上のURLとWebView2のURIが同じ場合、そのまま巡回開始する
             //[2021/09/11]WebView2が何か表示している場合（Sourceに値が入っている場合）それを巡回する
-            //※ブラウザに表示されているURLを入力しても同じ表示にならない場合があるため
-            if (webView2.CoreWebView2.Source.Length > 0) {
-                vm.URL = webView2.CoreWebView2.Source;
+            //※ブラウザに表示されているURLを入力しても同じ表示にならない場合があるため 
+            if (!GetWebView2URL().StartsWith("about:")) {
+                vm.URL = GetWebView2URL();
                 await webView2.CoreWebView2.ExecuteScriptAsync("getHrefSrcList();");
             } else
                 Navigate(vm.RealURL);
@@ -164,6 +258,10 @@ namespace SourceDownloader {
         }
 
         private void Window_Closing(object sender, CancelEventArgs e) {
+            survive = false;
+            try {
+                if (File.Exists(vm.DownloadingPath)) File.Delete(vm.DownloadingPath);//ダウンロード途中のファイルは消す
+            } catch { }
             if (vm.DownloadList.Count > 0) {//巡回が目的じゃなくてダウンロードが目的でした。
                 var xs = new XmlSerializer(typeof(ViewModel));
                 using (var fs = new FileStream(SettingPath, FileMode.Create, FileAccess.Write)) {
@@ -204,8 +302,14 @@ namespace SourceDownloader {
         public void CheckAndAddPatrolURLList(List<string> urls) {
             var hosts = vm.FirstPatrolURLs.Select(u => new Uri(u).Host.ToLower());//new Uri(vm.FirstPatrolURL).Host.ToLower();
             var baseUri = new Uri(vm.RealURL);
-            var addURLs = new List<string>();//後でまとめてInsertするための入れ物
+            var addURLs = new Collection<string>();//後でまとめてInsertするための入れ物
             foreach (var u in urls) {
+                //[2021/09/15]javascriptのonclick対応
+                if (u.StartsWith(javascript)) {
+                    if (!vm.PatrolURLList.Contains(u)) addURLs.Add(u);
+                    continue;
+                }
+
                 bool issrc = false;
                 var url = u;
                 if (url.StartsWith(src)) {
@@ -213,7 +317,9 @@ namespace SourceDownloader {
                     url = url.Substring(src.Length);
                 }
 
-                var otherUri = new Uri(baseUri, url);
+                Uri otherUri = null;
+                try { otherUri = new Uri(baseUri, url); }
+                catch (Exception ex) { Debug.Print(ex.GetType().ToString() + " " + ex.Message); continue; }
 
                 //[2021/09/09]HrefDownloadCondition追加（hrefでもこの条件にマッチする場合Downloadする）
                 //ダウンロードするものはホストが違ってもダウンロードするため先にチェック
@@ -224,7 +330,7 @@ namespace SourceDownloader {
 
                 if (!hosts.Contains(otherUri.Host.ToLower())) continue;//ホストが違う場合巡回しない
                 //otherUriがルートを示していれば巡回しない
-                if (otherUri.AbsoluteUri.ToLower() == (baseUri.Scheme + "://" + baseUri.Host + "/").ToLower()) continue;
+                if (IsBaseRoot(baseUri, otherUri)) continue;
 
                 //[2021/09/10]URLに#が入っていたらページ内リンクと思っていたが、そうでない場合もあることが判明（https://～～～/#/aiueo/abc.html みたいな感じのもある）
                 //従って、URLの最後の「/」以降の文字列に#が入っていたらページ内リンクとする
@@ -242,19 +348,17 @@ namespace SourceDownloader {
                     addURLs.Add(otherUri.AbsoluteUri);
                 }
             }
-            if (addURLs.Count > 0) {
-                var idx = vm.PatrolURLList.IndexOf(vm.RealURL);
-                if (idx < 0)
-                    vm.PatrolURLList.AddRange(addURLs);
-                else
-                    vm.PatrolURLList.InsertRange(idx + 1, addURLs.Distinct());
-            }
+
+            if (addURLs.Count > 0)
+                vm.PatrolURLList.InsertRange(GetInsertPos(), addURLs);
         }
 
         public void AddDownloadList(List<string> urls) {
             var baseUri = new Uri(vm.RealURL);
             foreach (var url in urls) {
-                var otherUri = new Uri(baseUri, url);
+                Uri otherUri = null;
+                try { otherUri = new Uri(baseUri, url); }
+                catch (Exception ex) { Debug.Print(ex.GetType().ToString() + " " + ex.Message); continue; }
                 if (CheckConditions(otherUri.AbsoluteUri, vm.DownloadConditionList) && !vm.DownloadList.Contains(otherUri.AbsoluteUri))
                     vm.DownloadList.Add(otherUri.AbsoluteUri);
             }
@@ -289,23 +393,30 @@ namespace SourceDownloader {
                     var code = m.Groups[2].Value;
                     var data = m.Groups[3].Value;
                     var path = GetSavePath("data." + type.Split('/')[1]);
-                    if (File.Exists(path)) File.Delete(path);//同ファイルが有る場合消す
+                    if (File.Exists(path)) return;
                     using (var ms = new MemoryStream(Convert.FromBase64String(data))) {
                         var bmp = Bitmap.FromStream(ms);
                         bmp.Save(path);
                     }
-                } catch { }
+                } finally {
+                    vm.DownloadingPath = null;
+                }
             } else {
                 try {
                     Uri uri = new Uri(src);
                     var path = GetSavePath(uri.LocalPath);
-                    if (File.Exists(path)) File.Delete(path);//同ファイルが有る場合消す（前回ダウンロード時、中途半端にダウンロードした物の可能性が高いため）
+                    if (File.Exists(path)) return;//同ファイルが有る場合何もしない
+                    vm.DownloadingPath = path;
                     using (var wc = new WebClient()) {
                         wc.DownloadFile(src, path);
                     }
-                } catch(WebException ex) {
+                } catch (Exception ex) {
                     //404 Not found の時無限ループしちゃうのでその対応
-                    if (!ex.Message.Contains("404")) throw;
+                    //と思ったけど、失敗したら全部無視で良いや
+                    //if (!ex.Message.Contains(IgnoreMsgs)) throw;
+                    File.AppendAllText(LogPath, $"[{DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss")}]" + ex.GetType().ToString() + "\t" + ex.Message + "\t" + src + "\r\n");
+                } finally {
+                    vm.DownloadingPath = null;
                 }
             }
         }
@@ -341,18 +452,53 @@ namespace SourceDownloader {
             if (other.EndsWith('/')) other = other.Substring(0, other.Length - 1);
             return baseRoot.ToLower() == other.ToLower();
         }
+        /// <summary>
+        /// vm.PatrolUrlListのどの位置に挿入するか取得する関数
+        /// </summary>
+        private int GetInsertPos() {
+            var ret = vm.PatrolPos + 1;
+            if (ret < vm.PatrolURLList.Count) {
+                while (vm.PatrolURLList[ret].StartsWith(javascript))
+                    ret++;
+            }
+            return ret;
+        }
+        private string GetWebView2URL() {
+            var url = "";
+            Dispatcher.Invoke(() => { url = webView2.CoreWebView2.Source; });
+            return url;
+        }
+        private bool IsIgnoreJavaScript(string js) {
+            var ijs = false;
+            Dispatcher.Invoke(() => { ijs = vm.IgnoreJavaScript; });
+            if(ijs) return ijs;
+
+            //vm.JavaScriptConditionsが設定されている場合、マッチした物だけ実行する
+            if (!string.IsNullOrEmpty(vm.JavaScriptConditions.Trim()) && Regex.IsMatch(js, vm.JavaScriptConditions))
+                return false;
+            return true;
+        }
+        private string GetJavaScriptFormMsg(string msg) {
+            return Regex.Replace(msg.Substring(msg.IndexOf('|') + 1), "return\\s*[\\;]*;?", "", RegexOptions.IgnoreCase);
+        }
 
         #region statics
+        static string url = "<<<url>>>";
         static string onload = "<<<onload>>>";
         static string hreflist = "<<<hreflist>>>";
         static string srclist = "<<<srclist>>>";
         static string src = "<<<src>>>";//a要素の子孫にsrc属性を持つ要素が存在する場合に追加するやつ（ホストが同じなら巡回する）
+        static string javascript = "<<<javascript>>>";//onclickでjavascriptを実行して遷移する場合、そのURLとメソッドを保持する必要がある
         //iframeのsrcは巡回する必要があるのでhrefとして追加し、ダウンロード用のsrcからは省く（何が入ってるか不明なのでsrcを含むa要素と同様に確実に巡回するようにする）
         static string GetHrefSrcListFunction {
             get {
                 return "function getHrefSrcList(){"
+                            + "var hrefs='"+url+"'+document.location.href+'\\n';"
+                            + "hrefs+='" + hreflist + "\\n';"
+
+                            + "hrefs+=getOnClickTargets(document.body);"
+
                             + "var as=document.getElementsByTagName('a');"
-                            + "var hrefs='" + hreflist + "\\n';"
                             + "for(var i=0;i<as.length;i++){"
                                 + "if(hasDescendantsSrcElement(as[i]))"
                                     + "hrefs+='" + src + "'+as[i].getAttribute('href')+'\\n';"
@@ -380,14 +526,29 @@ namespace SourceDownloader {
                                 + "if(hasDescendantsSrcElement(cs[i])) return true;"
                             + "}"
                         + "}"
+                        + "function getOnClickTargets(ele){"
+                            + "var ret='';"
+                            + "if(ele.hasAttribute('onclick')){"
+                                + "ret+='"+javascript+ "'+document.location.href+'|'+ele.getAttribute('onclick')+'\\n';"
+                                + "return ret;"
+                            + "}"
+                            + "if(!ele.hasChildNodes())return ret;"
+                            + "var cs=ele.childNodes;"
+                            + "for(var i=0;i<cs.length;i++){"
+                                + "if(cs[i].nodeType!=1) continue;"
+                                + "ret+=getOnClickTargets(cs[i]);"
+                            + "}"
+                            + "return ret;"
+                        + "}"
                         + "function getDescendantsSrcValues(ele){"
                             + "var ret='';"
                             + "if(!ele.hasChildNodes())return ret;"
                             + "var cs=ele.childNodes;"
                             + "for(var i=0;i<cs.length;i++){"
                                 + "if(cs[i].nodeType!=1) continue;"
-                                + "if(cs[i].hasAttribute('src') && cs[i].tagName.toLowerCase()!='iframe'){ ret+=cs[i].getAttribute('src')+'\\n';"
-                                + "if(cs[i].getAttribute('src').includes('php'))alert(cs[i].tagName);}"
+                                + "if(cs[i].hasAttribute('src') && cs[i].tagName.toLowerCase()!='iframe'){"
+                                    + "ret+=cs[i].getAttribute('src')+'\\n';"
+                                + "}"
                                 + "ret+=getDescendantsSrcValues(cs[i]);"
                             + "}"
                             + "return ret;"
@@ -396,14 +557,16 @@ namespace SourceDownloader {
         }
         static string OnLoadEvent {
             get {
-                return "var h='';"
-                        + "window.addEventListener('load', function () {"
-                            + "if (document.readyState === 'complete' && h!=document.location.href) {"
-                                + "h=document.location.href;"
-                                + "window.chrome.webview.postMessage('<<<onload>>>');"
-                            + "}"
-                        + "});";
-                //return "window.onload = function() {window.chrome.webview.postMessage('<<<onload>>>');}";
+                return "document.addEventListener('DOMContentLoaded', function() {"
+                            + "window.chrome.webview.postMessage(getHrefSrcList());"
+                        + "}, { once: true });";
+                //return "var h='';"
+                //        + "window.addEventListener('load', function () {"
+                //            + "if (document.readyState === 'complete' && h!=document.location.href) {"
+                //                + "h=document.location.href;"
+                //                + "window.chrome.webview.postMessage('<<<onload>>>');"
+                //            + "}"
+                //        + "});";
                 //return "window.addEventListener('popstate', (event) => {"
                 //        + "window.chrome.webview.postMessage('<<<onload>>>');"
                 //        + "});"
@@ -418,6 +581,16 @@ namespace SourceDownloader {
                 return "function getHtml(){"
                         + "window.chrome.webview.postMessage(document.getElementsByTagName('html')[0].outerHTML);"
                         + "}";
+            }
+        }
+        //このメッセージがエラーメッセージに入っているとダウンロードを中止して次に進む
+        static string[] IgnoreMsgs {
+            get {
+                return new string[]{
+                                    "404",
+                                    "An error occurred while sending the request.",
+                                    "An exception occurred during a WebClient request."
+                                    };
             }
         }
         #endregion
@@ -484,16 +657,96 @@ namespace SourceDownloader {
                 HrefDownloadConditionList = _HrefDownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
             }
         }
+        bool _IgnoreJavaScript = false;
+        public bool IgnoreJavaScript {
+            get { return _IgnoreJavaScript; }
+            set {
+                _IgnoreJavaScript = value;
+                OnPropertyChanged(nameof(IgnoreJavaScript));
+            }
+        }
+        string _JavaScriptConditions = "";
+        public string JavaScriptConditions {
+            get { return _JavaScriptConditions; }
+            set {
+                _JavaScriptConditions = value;
+                OnPropertyChanged(nameof(JavaScriptConditions));
+            }
+        }
 
+        public string DownloadingPath = null;//ダウンロード中のファイルパス（終了時＆起動時これがnullでない場合削除する）
         internal List<string> PatrolConditionList = new List<string>();
         internal List<string> DownloadConditionList = new List<string>();
         internal List<string> HrefDownloadConditionList = new List<string>();
 
         public List<string> FirstPatrolURLs { get; set; } = new List<string>();//ユーザーが最初に再生ボタンを押してダウンロード開始したURLのリスト
-        public int PatrolPos { get; set; }//PatrolURLListの何番目を巡回中か
-        public List<string> PatrolURLList { get; set; } = new List<string>();//巡回するURLのリスト
-        public int DownloadPos { get; set; }//DownloadListの何番目をダウンロード中か
-        public List<string> DownloadList { get; set; } = new List<string>();//ダウンロードするファイルのリスト
+        
+        int _PatrolPos = 0;
+        public int PatrolPos {//PatrolURLListの何番目を巡回中か
+            get { return _PatrolPos; }
+            set {
+                _PatrolPos = value;
+                OnPropertyChanged(nameof(PatrolPos));
+            }
+        }
+        public ObservableCollection<string> PatrolURLList { get; set; } = new ObservableCollection<string>();//巡回するURLのリスト
+
+        int _DownloadPos = 0;
+        public int DownloadPos {//DownloadListの何番目をダウンロード中か
+            get { return _DownloadPos; }
+            set {
+                _DownloadPos = value;
+                OnPropertyChanged(nameof(DownloadPos));
+            }
+        }
+        public ObservableCollection<string> DownloadList { get; set; } = new ObservableCollection<string>();//ダウンロードするファイルのリスト
+
+        string _PatrolStatus = "";
+        [XmlIgnore]
+        public string PatrolStatus {
+            get { return _PatrolStatus; }
+            set {
+                _PatrolStatus = value;
+                OnPropertyChanged(nameof(PatrolStatus));
+            }
+        }
+        string _DownloadStatus = "";
+        [XmlIgnore]
+        public string DownloadStatus {
+            get { return _DownloadStatus; }
+            set {
+                _DownloadStatus = value;
+                OnPropertyChanged(nameof(DownloadStatus));
+            }
+        }
+    }
+    public class ProgressMaximumConverter : IValueConverter {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
+            var cnt = (int)value;
+            if (cnt == 0) return 1;
+            else return cnt;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) {
+            return value;
+        }
+    }
+
+    public static class Common {
+        public static void AddRange<T>(this Collection<T> source, Collection<T> items) {
+            foreach (var i in items) source.Add(i);
+        }
+        public static void InsertRange<T>(this Collection<T> source,int index, Collection<T> items) {
+            if (index >= source.Count)
+                source.AddRange(items);
+            else
+                foreach (var i in items) source.Insert(index++, i);
+        }
+        public static bool Contains(this string text, IEnumerable<string> list, bool ignoreCase = true) {
+            var tmp1 = ignoreCase ? list.Select(t => t.ToLower()) : list;
+            var tmp2 = ignoreCase ? text.ToLower() : text;
+            return tmp1.Any(t => tmp2.Contains(t));
+        }
     }
 
 }

@@ -7,6 +7,9 @@
         xmlns:local="clr-namespace:SourceDownloader"
         mc:Ignorable="d"
         Title="Source Downloader" Height="450" Width="800" Closing="Window_Closing" Icon="Resources/SourceDownloader.ico">
+    <Window.Resources>
+        <local:ProgressMaximumConverter x:Key="ProgressMaximumConverter"/>
+    </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="25"/>
@@ -27,6 +30,7 @@
         <Expander Grid.Row="1" Header="Conditions">
             <Grid>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="25"/>
                     <RowDefinition Height="25"/>
                     <RowDefinition Height="25"/>
                     <RowDefinition Height="25"/>
@@ -52,11 +56,33 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="Download Conditions : " Grid.Column="0" VerticalAlignment="Center" HorizontalAlignment="Right" ToolTip="Slash separated"/>
+                    <TextBlock Grid.Column="0" Text="Download Conditions : " VerticalAlignment="Center" HorizontalAlignment="Right" ToolTip="Slash separated"/>
                     <TextBox Grid.Column="1" Text="{Binding DownloadConditions}"/>
+                </Grid>
+                <Grid Grid.Row="3">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <CheckBox Grid.Column="0" Content="Ignore All JavaScript" IsChecked="{Binding IgnoreJavaScript}"/>
+                    <TextBlock Grid.Column="1" Text="JavaScript Conditions : " Margin="10,0,0,0"/>
+                    <TextBox Grid.Column="2" Text="{Binding JavaScriptConditions}"/>
                 </Grid>
             </Grid>
         </Expander>
         <wv2:WebView2 x:Name="webView2" Grid.Row="2"/>
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="100"/>
+                <ColumnDefinition Width="Auto" MinWidth="100"/>
+                <ColumnDefinition Width="100"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <ProgressBar Grid.Column="0" Value="{Binding PatrolPos}" Maximum="{Binding PatrolURLList.Count,Converter={StaticResource ProgressMaximumConverter}}"/>
+            <TextBlock Grid.Column="1" Text="{Binding PatrolStatus}"/>
+            <ProgressBar Grid.Column="2" Value="{Binding DownloadPos}" Maximum="{Binding DownloadList.Count,Converter={StaticResource ProgressMaximumConverter}}"/>
+            <TextBlock Grid.Column="3" Text="{Binding DownloadStatus}"/>
+        </Grid>
     </Grid>
 </Window>
