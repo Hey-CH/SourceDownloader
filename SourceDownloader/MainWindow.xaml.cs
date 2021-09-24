@@ -100,9 +100,7 @@ namespace SourceDownloader {
                                     Navigate(url);
                             });
                             System.Threading.Thread.Sleep(100);
-                        } catch { } finally {
-                            Dispatcher.Invoke(() => { vm.PatrolStatus = vm.PatrolPos + "/" + vm.PatrolURLList.Count; });
-                        }
+                        } catch { }
                     }
                 }
             });
@@ -114,14 +112,24 @@ namespace SourceDownloader {
                         try {
                             Download(vm.DownloadList[vm.DownloadPos]);
                             vm.DownloadPos++;
+                            System.Threading.Thread.Sleep(100);
 
                             //ダウンロード完了時メッセージボックス表示
                             if (vm.DownloadPos >= vm.DownloadList.Count && vm.PatrolPos >= vm.PatrolURLList.Count)
                                 MessageBox.Show("Download completed.");
-                        } catch { } finally {
-                            Dispatcher.Invoke(() => { vm.DownloadStatus = vm.DownloadPos + "/" + vm.DownloadList.Count; });
-                        }
+                        } catch { }
                     }
+                }
+            });
+
+            //表示用スレッド
+            Task.Run(() => {
+                while (survive) {
+                    Dispatcher.Invoke(() => {
+                        vm.DownloadStatus = vm.DownloadPos + "/" + vm.DownloadList.Count;
+                        vm.PatrolStatus = vm.PatrolPos + "/" + vm.PatrolURLList.Count;
+                    });
+                    System.Threading.Thread.Sleep(100);
                 }
             });
         }
@@ -187,7 +195,7 @@ namespace SourceDownloader {
         }
         private async Task ExecMsgAfterWait() {
             await Task.Run(async () => {
-                while (waitCount < 20) {
+                while (waitCount < 15) {
                     System.Threading.Thread.Sleep(100);
                     waitCount++;
                 }
