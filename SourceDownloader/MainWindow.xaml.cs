@@ -36,21 +36,21 @@ namespace SourceDownloader {
         string exeJavaScript = "";//実行するjavascript
         int patrolBefore = -1;//getHrefSrcListが帰ってきたときに確認するPos
         bool survive = true;
-        private string dlDir {
+        private string DownloadDir {
             get {
                 if(string.IsNullOrEmpty(_DownloadDir))
-                    _DownloadDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "download");
+                    _DownloadDir = System.IO.Path.Combine(vm != null ? vm.OutDir : AppDomain.CurrentDomain.BaseDirectory, "download");
                 return _DownloadDir;
             }
         }
         private string SettingPath {
             get {
-                return System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "setting.xml"); ;
+                return System.IO.Path.Combine(vm != null ? vm.OutDir : AppDomain.CurrentDomain.BaseDirectory, "setting.xml"); ;
             }
         }
         private string LogPath {
             get {
-                return System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "failed.log"); ;
+                return System.IO.Path.Combine(vm != null ? vm.OutDir : AppDomain.CurrentDomain.BaseDirectory, "failed.log"); ;
             }
         }
 
@@ -60,6 +60,20 @@ namespace SourceDownloader {
             InitWebView2();
 
             vm = new ViewModel();
+            vm.PropertyChanged += (s, e) => {
+                if (e.PropertyName == nameof(vm.OutDir) && File.Exists(SettingPath)) {
+                    if (MessageBox.Show("Do you want to resume previous download?", "Resume confirm", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes) {
+                        var xs = new XmlSerializer(typeof(ViewModel));
+                        using (var fs = new FileStream(SettingPath, FileMode.Open, FileAccess.Read)) {
+                            var tmp = (ViewModel)xs.Deserialize(fs);
+                            var r = vm.Ready;
+                            tmp.Ready = r;//デフォがfalseなので手動でやってあげないといけない
+                            vm = tmp;
+                            this.DataContext = vm;
+                        }
+                    }
+                }
+            };
             if (File.Exists(SettingPath)) {
                 if (MessageBox.Show("Do you want to resume previous download?", "Resume confirm", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes) {
                     var xs = new XmlSerializer(typeof(ViewModel));
@@ -270,11 +284,9 @@ namespace SourceDownloader {
             try {
                 if (File.Exists(vm.DownloadingPath)) File.Delete(vm.DownloadingPath);//ダウンロード途中のファイルは消す
             } catch { }
-            if (vm.DownloadList.Count > 0) {//巡回が目的じゃなくてダウンロードが目的でした。
-                var xs = new XmlSerializer(typeof(ViewModel));
-                using (var fs = new FileStream(SettingPath, FileMode.Create, FileAccess.Write)) {
-                    xs.Serialize(fs, vm);
-                }
+            var xs = new XmlSerializer(typeof(ViewModel));
+            using (var fs = new FileStream(SettingPath, FileMode.Create, FileAccess.Write)) {
+                xs.Serialize(fs, vm);
             }
         }
 
@@ -331,7 +343,7 @@ namespace SourceDownloader {
 
                 //[2021/09/09]HrefDownloadCondition追加（hrefでもこの条件にマッチする場合Downloadする）
                 //ダウンロードするものはホストが違ってもダウンロードするため先にチェック
-                if (CheckConditions(otherUri.AbsoluteUri, vm.HrefDownloadConditionList)) {
+                if (CheckConditions(otherUri.AbsoluteUri, vm.HrefDownloadConditions)) {
                     if (!vm.DownloadList.Contains(otherUri.AbsoluteUri)) vm.DownloadList.Add(otherUri.AbsoluteUri);
                     continue;
                 }
@@ -346,11 +358,14 @@ namespace SourceDownloader {
                     && otherUri.AbsoluteUri.Substring(otherUri.AbsoluteUri.LastIndexOf('/')).Contains("#")) continue;//Page内リンクはNavigatedイベントが発生しないので無視（id記法の場合はそもそも取得しない）
 
                 var check = true;
-                if (!issrc) {//a要素がsrcを持つ要素の先祖である場合基本的に追加する（SourceDownloaderなので。）
-                    check = CheckConditions(otherUri.AbsoluteUri, vm.PatrolConditionList);
+                if (vm.CheckAll || !issrc) {//a要素がsrcを持つ要素の先祖である場合基本的に追加する（SourceDownloaderなので。）
+                    check = CheckConditions(otherUri.AbsoluteUri, vm.PatrolConditions);
                 }
                 //無視もせず、巡回したリストにも、巡回するリストにも無い場合追加
-                if (check && !vm.FirstPatrolURLs.Select(u=>u.ToLower()).Contains(otherUri.AbsoluteUri.ToLower()) && !vm.PatrolURLList.Contains(otherUri.AbsoluteUri)) {
+                if (check
+                    && !vm.FirstPatrolURLs.Select(u=>u.ToLower()).Contains(otherUri.AbsoluteUri.ToLower())
+                    && !vm.PatrolURLList.Contains(otherUri.AbsoluteUri)
+                    && !addURLs.Contains(otherUri.AbsoluteUri)) {
                     //Appendすると、関係ないページの後にPatrolする事になるので、現在見ているページの直後に追加する
                     //vm.PatrolURLList.Add(otherUri.AbsoluteUri);
                     addURLs.Add(otherUri.AbsoluteUri);
@@ -367,30 +382,13 @@ namespace SourceDownloader {
                 Uri otherUri = null;
                 try { otherUri = new Uri(baseUri, url); }
                 catch (Exception ex) { Debug.Print(ex.GetType().ToString() + " " + ex.Message); continue; }
-                if (CheckConditions(otherUri.AbsoluteUri, vm.DownloadConditionList) && !vm.DownloadList.Contains(otherUri.AbsoluteUri))
+                if (CheckConditions(otherUri.AbsoluteUri, vm.DownloadConditions) && !vm.DownloadList.Contains(otherUri.AbsoluteUri))
                     vm.DownloadList.Add(otherUri.AbsoluteUri);
             }
         }
-        private bool CheckConditions(string absoluteUri, List<string> conditionList) {
-            var check = true;
-            foreach (var cnd in conditionList) {
-                //!で始まる場合はそれ以降の文字がマッチする場合falseを返す
-                //それ以外は、その文字列がマッチしない場合falseを返す
-                if (cnd.StartsWith('!')) {
-                    if (Regex.IsMatch(absoluteUri, cnd.Substring(1), RegexOptions.IgnoreCase)){
-                        check = false;
-                        break;
-                    }
-                } else {
-                    //!が付いていない場合は、そのパターンがマッチしないとダメだが、|で区切る事で複数パターン登録できる
-                    //[2021/09/09]↑の仕様廃止（複数の場合も正規表現で指定）
-                    if (!Regex.IsMatch(absoluteUri, cnd, RegexOptions.IgnoreCase)) {
-                        check = false;
-                        break;
-                    }
-                }
-            }
-            return check;
+        private bool CheckConditions(string absoluteUri, string condition) {
+            //[2021/09/27]単純に正規表現のCheckだけにしました。
+            return Regex.IsMatch(absoluteUri, condition, RegexOptions.IgnoreCase);
         }
         private void Download(string src) {
             if (string.IsNullOrEmpty(src)) throw new ArgumentNullException("invalid source");//DownloadListの最後を参照している場合、稀にnullになる事がある
@@ -431,13 +429,17 @@ namespace SourceDownloader {
         private string GetSavePath(string name) {
             if (name.StartsWith("/")) name = name.Substring(1);//nameの先頭が/だとルート相対パスになるので削除
             if (name.Contains("/")) name = name.Replace("/", "\\");//やらなくても大丈夫だけど一応置換しとく
-            var path = System.IO.Path.Combine(dlDir, name);
+            var path = System.IO.Path.Combine(DownloadDir, name);
             if (File.Exists(path)) {
-                var n = name.Split('.')[0];
-                var e = name.Split('.')[1];
+                var n = name;
+                var e = "";
+                try {
+                    n = name.Substring(0, name.LastIndexOf('.'));
+                    e = name.Substring(name.LastIndexOf('.') + 1);
+                } catch { }
                 var i = 0;
                 while (File.Exists(path)) {
-                    path = System.IO.Path.Combine(dlDir, n + (++i) + "." + e);
+                    path = System.IO.Path.Combine(DownloadDir, n + (++i) + "." + e);
                 }
             }
             var dir = new FileInfo(path).DirectoryName;
@@ -607,6 +609,22 @@ namespace SourceDownloader {
         public event PropertyChangedEventHandler PropertyChanged;
         private void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
+        string _OutDir = Properties.Settings.Default.OutDir;
+        [XmlIgnore]
+        public string OutDir {
+            get {
+                if (string.IsNullOrEmpty(_OutDir))
+                    return AppDomain.CurrentDomain.BaseDirectory;
+                return _OutDir;
+            }
+            set {
+                _OutDir = value;
+                Properties.Settings.Default.OutDir = value;
+                Properties.Settings.Default.Save();
+                OnPropertyChanged(nameof(OutDir));
+            }
+        }
+
         bool _Ready = false;
         [XmlIgnore]
         public bool Ready {
@@ -633,6 +651,14 @@ namespace SourceDownloader {
                     return _URL;
             }
         }
+        bool _CheckAll = false;//PatrolConditionをa要素の子孫にsrcを持つ要素がいたとしても適用するかどうかを指定
+        public bool CheckAll {
+            get { return _CheckAll; }
+            set {
+                _CheckAll = value;
+                OnPropertyChanged(nameof(CheckAll));
+            }
+        }
         string _PatrolConditions = "";
         public string PatrolConditions {
             get {
@@ -640,29 +666,24 @@ namespace SourceDownloader {
             }
             set {
                 _PatrolConditions = value;
-                PatrolConditionList = _PatrolConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
             }
         }
-        string _DownloadConditions = @"!\.js";
+        string _DownloadConditions = @"(?!\.js$)";
         public string DownloadConditions {
             get {
-                DownloadConditionList = _DownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
                 return _DownloadConditions;
             }
             set {
                 _DownloadConditions = value;
-                DownloadConditionList = _DownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
             }
         }
         string _HrefDownloadConditions = @"\.(jpg|jpeg|png|bmp|gif|tiff|svg|psd|pdf|webp|zip|mp4|mov)$";
         public string HrefDownloadConditions {
             get {
-                HrefDownloadConditionList = _HrefDownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
                 return _HrefDownloadConditions;
             }
             set {
                 _HrefDownloadConditions = value;
-                HrefDownloadConditionList = _HrefDownloadConditions.Split('/').Select(c => c.Trim()).Where(c => !string.IsNullOrEmpty(c)).ToList();
             }
         }
         bool _IgnoreJavaScript = false;
@@ -683,9 +704,6 @@ namespace SourceDownloader {
         }
 
         public string DownloadingPath = null;//ダウンロード中のファイルパス（終了時＆起動時これがnullでない場合削除する）
-        internal List<string> PatrolConditionList = new List<string>();
-        internal List<string> DownloadConditionList = new List<string>();
-        internal List<string> HrefDownloadConditionList = new List<string>();
 
         public List<string> FirstPatrolURLs { get; set; } = new List<string>();//ユーザーが最初に再生ボタンを押してダウンロード開始したURLのリスト
         
