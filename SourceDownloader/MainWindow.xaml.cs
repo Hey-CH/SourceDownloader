@@ -284,6 +284,10 @@ namespace SourceDownloader {
             try {
                 if (File.Exists(vm.DownloadingPath)) File.Delete(vm.DownloadingPath);//ダウンロード途中のファイルは消す
             } catch { }
+            //[2021/09/29]設定ファイルが存在する場合、上書きするか確認する
+            if (File.Exists(SettingPath))
+                if (MessageBox.Show("setting.xml already exists.\nDo you want to overwrite?\n"+SettingPath, "Overwrite", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                    return;
             var xs = new XmlSerializer(typeof(ViewModel));
             using (var fs = new FileStream(SettingPath, FileMode.Create, FileAccess.Write)) {
                 xs.Serialize(fs, vm);
@@ -372,8 +376,12 @@ namespace SourceDownloader {
                 }
             }
 
-            if (addURLs.Count > 0)
-                vm.PatrolURLList.InsertRange(GetInsertPos(), addURLs);
+            if (addURLs.Count > 0) {
+                if (vm.IsInsert)
+                    vm.PatrolURLList.InsertRange(GetInsertPos(), addURLs);
+                else
+                    vm.PatrolURLList.AddRange(addURLs);
+            }
         }
 
         public void AddDownloadList(List<string> urls) {
@@ -413,9 +421,10 @@ namespace SourceDownloader {
                     var path = GetSavePath(uri.LocalPath);
                     if (File.Exists(path)) return;//同ファイルが有る場合何もしない
                     vm.DownloadingPath = path;
-                    using (var wc = new WebClient()) {
-                        wc.DownloadFile(src, path);
-                    }
+                    //using (var wc = new WebClient()) {
+                    //    wc.DownloadFile(src, path);
+                    //}
+                    Download(src, path);
                 } catch (Exception ex) {
                     //404 Not found の時無限ループしちゃうのでその対応
                     //と思ったけど、失敗したら全部無視で良いや
@@ -424,6 +433,36 @@ namespace SourceDownloader {
                 } finally {
                     vm.DownloadingPath = null;
                 }
+            }
+        }
+        private void Download(string src, string path, int timeout = 5000) {
+            long fsize = 0;
+            if (File.Exists(path)) fsize = new FileInfo(path).Length;
+            try {
+                var req = (HttpWebRequest)WebRequest.Create(src);
+                req.Timeout = timeout;
+                var res = (HttpWebResponse)req.GetResponse();
+                var buff = new byte[1024];
+                using (var s = res.GetResponseStream()) {
+                    //if (fsize == s.Length) return;//ダウンロードが終わっていたら何もしない←って使用と思ったけどエラーになるので廃止
+                    using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write)) {
+                        //途中ならレジュームしようかと思ったが、途中まで同じかどうかを判断するのが面倒だし時間もかかるので止めた。
+                        int len = 0;
+                        while ((len = s.Read(buff)) > 0) {
+                            fs.Write(buff, 0, len);
+                        }
+                    }
+                }
+            } catch(WebException ex){
+                if (ex.Status == WebExceptionStatus.Timeout) {
+                    //タイムアウトが発生した場合、ファイルサイズが増加していればタイムアウトの間隔を大きくして再度ダウンロード
+                    if (File.Exists(path) && new FileInfo(path).Length > fsize) {
+                        var to = timeout + 10000;
+                        if (to > 30000) throw;
+                        else Download(src, path, to);
+                    }
+                }
+                throw;
             }
         }
         private string GetSavePath(string name) {
@@ -726,6 +765,8 @@ namespace SourceDownloader {
             }
         }
         public ObservableCollection<string> DownloadList { get; set; } = new ObservableCollection<string>();//ダウンロードするファイルのリスト
+
+        public bool IsInsert { get; set; } = true;//巡回URLをInsertするかAppendするか（隠しパラメータ的な感じ）
 
         string _PatrolStatus = "";
         [XmlIgnore]
