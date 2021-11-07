@@ -88,7 +88,7 @@ namespace SourceDownloader {
             //巡回スレッド
             Task.Run(() => {
                 while (survive) {
-                    if (vm.PatrolPos < vm.PatrolURLList.Count && vm.Ready && !string.IsNullOrEmpty(vm.PatrolURLList[vm.PatrolPos])) {
+                    if (!vm.DownloadOnly && vm.PatrolPos < vm.PatrolURLList.Count && vm.Ready && !string.IsNullOrEmpty(vm.PatrolURLList[vm.PatrolPos])) {
                         try {
                             if (patrolBefore == vm.PatrolPos) continue;
                             patrolBefore = vm.PatrolPos;
@@ -110,12 +110,14 @@ namespace SourceDownloader {
                                     vm.Ready = false;//NavigateしなくてもURLが変わる可能性があるため設定
                                     CoreWebView2_NavigationCompleted(webView2, null);
                                     executeJs = false;
-                                } else
-                                    Navigate(url);
+                                } else {
+                                    if (!vm.SameHost || vm.IsSameHost(url))
+                                        Navigate(url);
+                                }
                             });
-                            System.Threading.Thread.Sleep(100);
                         } catch { }
                     }
+                    System.Threading.Thread.Sleep(100);
                 }
             });
 
@@ -421,10 +423,7 @@ namespace SourceDownloader {
                     var path = GetSavePath(uri.LocalPath);
                     if (File.Exists(path)) return;//同ファイルが有る場合何もしない
                     vm.DownloadingPath = path;
-                    //using (var wc = new WebClient()) {
-                    //    wc.DownloadFile(src, path);
-                    //}
-                    Download(src, path);
+                    Download(src, path, vm.Timeout);
                 } catch (Exception ex) {
                     //404 Not found の時無限ループしちゃうのでその対応
                     //と思ったけど、失敗したら全部無視で良いや
@@ -457,8 +456,8 @@ namespace SourceDownloader {
                 if (ex.Status == WebExceptionStatus.Timeout) {
                     //タイムアウトが発生した場合、ファイルサイズが増加していればタイムアウトの間隔を大きくして再度ダウンロード
                     if (File.Exists(path) && new FileInfo(path).Length > fsize) {
-                        var to = timeout + 10000;
-                        if (to > 30000) throw;
+                        var to = timeout + vm.Timeout;
+                        if (to > vm.Timeout * 3) throw;
                         else Download(src, path, to);
                     }
                 }
@@ -698,6 +697,14 @@ namespace SourceDownloader {
                 OnPropertyChanged(nameof(CheckAll));
             }
         }
+        bool _SameHost = false;//巡回するURLを最初に入力したホストと同じものだけにするかどうか
+        public bool SameHost {
+            get { return _SameHost; }
+            set {
+                _SameHost = value;
+                OnPropertyChanged(nameof(SameHost));
+            }
+        }
         string _PatrolConditions = "";
         public string PatrolConditions {
             get {
@@ -705,6 +712,15 @@ namespace SourceDownloader {
             }
             set {
                 _PatrolConditions = value;
+            }
+        }
+
+        bool _DownloadOnly = false;//巡回せずにダウンロードのみ行う
+        public bool DownloadOnly {
+            get { return _DownloadOnly; }
+            set {
+                _DownloadOnly = value;
+                OnPropertyChanged(nameof(DownloadOnly));
             }
         }
         string _DownloadConditions = @"(?!\.js$)";
@@ -742,6 +758,9 @@ namespace SourceDownloader {
             }
         }
 
+        public bool IsInsert { get; set; } = true;//巡回URLをInsertするかAppendするか（隠しパラメータ的な感じ）
+        public int Timeout { get; set; } = 10000;//タイムアウトの時間（これも隠し）
+
         public string DownloadingPath = null;//ダウンロード中のファイルパス（終了時＆起動時これがnullでない場合削除する）
 
         public List<string> FirstPatrolURLs { get; set; } = new List<string>();//ユーザーが最初に再生ボタンを押してダウンロード開始したURLのリスト
@@ -766,8 +785,6 @@ namespace SourceDownloader {
         }
         public ObservableCollection<string> DownloadList { get; set; } = new ObservableCollection<string>();//ダウンロードするファイルのリスト
 
-        public bool IsInsert { get; set; } = true;//巡回URLをInsertするかAppendするか（隠しパラメータ的な感じ）
-
         string _PatrolStatus = "";
         [XmlIgnore]
         public string PatrolStatus {
@@ -785,6 +802,15 @@ namespace SourceDownloader {
                 _DownloadStatus = value;
                 OnPropertyChanged(nameof(DownloadStatus));
             }
+        }
+        /// <summary>
+        /// urlがユーザーが最初に入力したURLのホストと同じホストである場合trueを返します
+        /// </summary>
+        public bool IsSameHost(string url) {
+            var host = new Uri(url).Host.ToLower();
+            foreach (var i in FirstPatrolURLs)
+                if (new Uri(i).Host.ToLower() == host) return true;
+            return false;
         }
     }
     public class ProgressMaximumConverter : IValueConverter {
